@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="./libs/d3.js"></script>
+    <script src="https://d3js.org/topojson.v1.min.js"></script>
+    <title>MA Map</title>
+    <style>
+        body{font-family: Segoe UI;}
+        h1,h3,h4,b{font-family: Segoe UI Semibold;}
+        div {
+            position: absolute;
+            opacity: 0;
+            top: 0;
+            left: 0;
+            width: auto;
+            padding: 10px;
+            background: white;
+            font-family: sans-serif;
+            font-size: medium;
+            border-radius: 2px;
+            line-height: 1;
+        }
+        path {
+            stroke-width: .5px;
+            stroke: black
+        }
+        path:hover {
+            opacity: .6;
+            stroke: black;
+            stroke-width: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Population in 1980</h2>
+    <div id="pop1980"></div>
+    <hr>
+    <h2>Population change from 1980 to 1990 in each town</h2>
+    <div id="pop1990"></div>
+    <hr>
+    <h2>Population change from 1990 to 2000 in each town</h2>
+    <div id="pop2000"></div>
+    <hr>
+    <h2>Population change from 2000 to 2010 in each town</h2>
+    <div id="pop2010"></div>
+    <hr>
+    <h2>Color by county</h2>
+    <div id="county"></div>
+    <script>
+        /*-------------------------------------------------------*/
+        /*------------------- Window setting --------------------*/
+        /*-------------------------------------------------------*/
+        // dimension of the page
+        const window_dims = {
+            width: window.innerWidth,
+            height: window.innerHeight
+        };
+        const margin = window_dims.width * .2
+
+
+        /*-------------------------------------------------------*/
+        /*-----------------parallel load data--------------------*/
+        /*-------------------------------------------------------*/
+
+        // a topojson file containing population of each town in different years
+        const MA_counties = "https://raw.githubusercontent.com/umassdgithub/week-6-Activity/main/data/towns.topojson"//"./data/towns.topojson"
+        // gini index per county
+        const gini_index = "https://raw.githubusercontent.com/umassdgithub/week-6-Activity/main/data/gini_index.csv"//"./data/gini_index.csv"
+
+
+        // open both files
+        Promise.all([
+            d3.json(MA_counties),
+            d3.csv(gini_index)
+        ]).then(data => {
+            // topology data
+            const topo_data = data[0];
+            // gini index data
+            const csv_data = data[1];
+
+            /*-------------------------------------------------------*/
+            /*-----------------Topojson data handling----------------*/
+            /*-------------------------------------------------------*/
+            // if topojson file is imported we need to
+            // convert topology data to geojson
+            const geojson = topojson.feature(topo_data, topo_data.objects.ma);
+
+            /*-------------------------------------------------------*/
+            /*----------------------Projections----------------------*/
+            /*-------------------------------------------------------*/
+            const projections = [
+                d3.geoAzimuthalEqualArea(), //Azimuthal projections project the sphere directly onto a plane.
+                d3.geoAlbersUsa(), // USA conic projection
+                d3.geoAlbers(), // equal-area conic projection
+                d3.geoMercator(), // cylindrical projection
+                d3.geoNaturalEarth1(), // pseudocylindrical projection designed by Tom Patterson
+                d3.geoEqualEarth(), // Equal Earth projection, by Bojan Šavrič et al., 2018.
+                d3.geoConicEqualArea(), //equal-area conic projection
+                d3.geoEquirectangular(), //Cylindrical Projections
+                d3.geoOrthographic()
+            ]
+
+            /*-------------------------------------------------------*/
+            /*----------------geoPath generator----------------------*/
+            /*-------------------------------------------------------*/
+
+            const geoPath_generator = d3.geoPath()
+                .projection(projections[3].fitSize([window_dims.width - margin, window_dims.height - margin], geojson))
+
+            /*-------------------------------------------------------*/
+            /*----------------------Color Scaling--------------------*/
+            /*-------------------------------------------------------*/
+            ////https://observablehq.com/@d3/working-with-color
+            var colorInterpolator = d3.interpolateRgbBasis(["blue", "steelblue", "green", "purple", "red"])
+            // if the data is scaled using log scale
+            let logScale1980 = d3.scaleLog()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['POP1980']
+                }))
+
+            // if the data is scaled using linear scale
+            let linearScale1980 = d3.scaleLinear()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['POP1980']
+                }))
+            let linearScale1990 = d3.scaleLinear()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['POP1990'] - d['properties']['POP1980']
+                }))
+            let linearScale2000 = d3.scaleLinear()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['POP2000'] - d['properties']['POP1990']
+                }))
+            let linearScale2010 = d3.scaleLinear()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['POP2010'] - d['properties']['POP2000']
+                }))
+            let linearScaleCounty = d3.scaleLinear()
+                .domain(d3.extent(geojson.features, (d) => {
+                    return d['properties']['FIPS_STCO']
+                }))
+
+
+            /*-------------------------------------------------------*/
+            /*---------------------- Tooltip ------------------------*/
+            /*-------------------------------------------------------*/
+            const pop1980 = d3.select("#pop1980");
+            const pop1990 = d3.select("#pop1990");
+            const pop2000 = d3.select("#pop2000");
+            const pop2010 = d3.select("#pop2010");
+            const county = d3.select("#county");
+
+
+            /*--------------------------------------------------------*/
+            /*----------------- channelling marks --------------------*/
+            /*--------------------------------------------------------*/
+
+            // Append a SVG element to body, then append a path for the boundaries
+            let svg1980 = d3.select("body").insert("svg",'#pop1980')
+                .attr("width", "80vw")
+                .attr("height", "60vh");
+
+            svg1980.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+            //.attr("fill", d => colorInterpolator(logScale(d['properties']['POP1980'])))
+            .attr("fill", d => colorInterpolator(linearScale1980(d['properties']['POP1980'])))
+            .on("mouseenter", (m, d) => {
+                pop1980.transition()
+                    .duration(200)
+                    .style("opacity", .9)
+                pop1980.html(d['properties']['TOWN']+': '+d['properties']['POP1980'])
+                    .style("left", m.pageX+"px")
+                    .style("top", m.pageY+"px");
+            })
+            .on("mousemove", (m, d) => {
+                pop1980.style("opacity", .9)
+            })
+            .on("mouseout", (m, d) => {
+                pop1980.transition()
+                    .duration(200)
+                    .style("opacity", 0)
+            })
+
+            // add SVG elements for each graph
+            // population change from 1980 to 1990
+            let svg1990 = d3.select("body").insert("svg",'#pop1990')
+                .attr("width", "80vw")
+                .attr("height", "60vh");
+
+            svg1990.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+            .attr("fill", d => colorInterpolator(linearScale1990(d['properties']['POP1990']-d['properties']['POP1980'])))
+            .on("mouseenter", (m, d) => {
+                pop1990.transition()
+                    .duration(200)
+                    .style("opacity", .9)
+                pop1990.html(d['properties']['TOWN']+': '+(d['properties']['POP1990']-d['properties']['POP1980']))
+                    .style("left", m.pageX+"px")
+                    .style("top", m.pageY+"px");
+            })
+            .on("mousemove", (m, d) => {
+                pop1990.style("opacity", .9)
+            })
+            .on("mouseout", (m, d) => {
+                pop1990.transition()
+                    .duration(200)
+                    .style("opacity", 0)
+            })
+
+            // population change from 1990 to 2000
+            let svg2000 = d3.select("body").insert("svg",'#pop2000')
+                .attr("width", "80vw")
+                .attr("height", "60vh");
+
+            svg2000.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+            .attr("fill", d => colorInterpolator(linearScale2000(d['properties']['POP2000']-d['properties']['POP1990'])))
+            .on("mouseenter", (m, d) => {
+                pop2000.transition()
+                    .duration(200)
+                    .style("opacity", .9)
+                pop2000.html(d['properties']['TOWN']+': '+(d['properties']['POP2000']-d['properties']['POP1990']))
+                    .style("left", m.pageX+"px")
+                    .style("top", m.pageY+"px");
+            })
+            .on("mousemove", (m, d) => {
+                pop2000.style("opacity", .9)
+            })
+            .on("mouseout", (m, d) => {
+                pop2000.transition()
+                    .duration(200)
+                    .style("opacity", 0)
+            })
+
+            // population change from 2000 to 2010
+            let svg2010 = d3.select("body").insert("svg",'#pop2010')
+                .attr("width", "80vw")
+                .attr("height", "60vh");
+
+            svg2010.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+            .attr("fill", d => colorInterpolator(linearScale2010(d['properties']['POP2010']-d['properties']['POP2000'])))
+            .on("mouseenter", (m, d) => {
+                pop2010.transition()
+                    .duration(200)
+                    .style("opacity", .9)
+                pop2010.html(d['properties']['TOWN']+': '+(d['properties']['POP2010']-d['properties']['POP2000']))
+                    .style("left", m.pageX+"px")
+                    .style("top", m.pageY+"px");
+            })
+            .on("mousemove", (m, d) => {
+                pop2010.style("opacity", .9)
+            })
+            .on("mouseout", (m, d) => {
+                pop2010.transition()
+                    .duration(200)
+                    .style("opacity", 0)
+            })
+
+
+            // color by county
+            let svgCounty = d3.select("body").insert("svg",'#county')
+                .attr("width", "80vw")
+                .attr("height", "60vh");
+
+            svgCounty.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+            .attr("fill", d => colorInterpolator(linearScaleCounty(d['properties']['FIPS_STCO'])))
+                .on("mouseenter", (m, d) => {
+                county.transition()
+                    .duration(200)
+                    .style("opacity", .9)
+                county.html(d['properties']['TOWN']+': '+d['properties']['FIPS_STCO'])
+                    .style("left", m.pageX+"px")
+                    .style("top", m.pageY+"px");
+            })
+            .on("mousemove", (m, d) => {
+                county.style("opacity", .9)
+            })
+            .on("mouseout", (m, d) => {
+                county.transition()
+                    .duration(200)
+                    .style("opacity", 0)
+            })
+        // end
+        })
+
+    </script>
+</body>
+
+</html>
